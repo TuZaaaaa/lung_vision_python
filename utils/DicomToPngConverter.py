@@ -1,64 +1,110 @@
+import io
 import os
+import cv2
 import pydicom
 import numpy as np
 from PIL import Image
-from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor
-from typing import List
+from typing import Dict
 
-@dataclass
 class DicomToPngConverter:
-    input_dir: str
-    output_dir: str
-    workers: int = 4
-    dicom_files: List[str] = field(default_factory=list, init=False)
+    """
+    处理 DICOM 转 PNG，使用流式方式存储，不落地磁盘。
+    """
 
-    def __post_init__(self):
-        """初始化时创建输出目录，并查找所有 DICOM 文件"""
-        os.makedirs(self.output_dir, exist_ok=True)
-        self.dicom_files = self._find_dicom_files()
+    @staticmethod
+    def convert_stream(dicom_files: Dict[str, bytes]) -> Dict[str, bytes]:
+        """
+        将 DICOM 文件转换为 PNG，并返回字节数据。
 
-    def _find_dicom_files(self) -> List[str]:
-        """递归查找所有 DICOM 文件"""
-        dicom_files = []
-        for root, _, files in os.walk(self.input_dir):
-            for file in files:
-                dicom_files.append(os.path.join(root, file))
-        return dicom_files
+        :param dicom_files: 包含 DICOM 文件数据的字典，键为文件名，值为文件的字节数据。
+        :return: 一个字典，键为转换后的 PNG 文件名，值为 PNG 文件的字节数据。
+        """
+        converted_images = {}
 
-    def _convert_single_file(self, dicom_path: str):
-        """转换单个 DICOM 文件为 PNG"""
-        try:
-            dicom_data = pydicom.dcmread(dicom_path)
-            image_array = dicom_data.pixel_array.astype(np.float32)
+        def process_single_file(file_name, file_bytes):
+            try:
+                dicom_data = pydicom.dcmread(io.BytesIO(file_bytes), force=True)
 
-            # 归一化处理
-            image_array = (image_array - np.min(image_array)) / (np.max(image_array) - np.min(image_array))
-            image_array = (image_array * 255).astype(np.uint8)
+                # 检查 Pixel Data 是否存在
+                if not hasattr(dicom_data, "PixelData"):
+                    print(f"Warning: {file_name} has no Pixel Data.")
+                    return
 
-            # 生成 PNG 输出路径，保持目录层级
-            relative_path = os.path.relpath(dicom_path, self.input_dir)
-            png_path = os.path.join(self.output_dir, relative_path) + ".png"
-            os.makedirs(os.path.dirname(png_path), exist_ok=True)
+                # 解码 Pixel Data
+                dicom_data.decompress()
 
-            # 保存 PNG
-            Image.fromarray(image_array).save(png_path)
-            print(f"Converted: {dicom_path} -> {png_path}")
+                # 读取像素数据并转换为浮点型
+                image_array = dicom_data.pixel_array.astype(np.float32)
 
-        except Exception as e:
-            print(f"Failed to convert {dicom_path}: {e}")
+                # 若存在 RescaleSlope 和 RescaleIntercept，则进行重标定
+                if hasattr(dicom_data, 'RescaleSlope') and hasattr(dicom_data, 'RescaleIntercept'):
+                    image_array = image_array * float(dicom_data.RescaleSlope) + float(dicom_data.RescaleIntercept)
 
-    def convert_all(self):
-        """批量转换所有 DICOM 文件"""
-        print(f"Found {len(self.dicom_files)} DICOM files to convert.")
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            executor.map(self._convert_single_file, self.dicom_files)
+                # 针对 MONOCHROME1 类型的图像进行反转（MONOCHROME1 的高像素值代表暗部）
+                if hasattr(dicom_data, 'PhotometricInterpretation') and dicom_data.PhotometricInterpretation == "MONOCHROME1":
+                    image_array = np.max(image_array) - image_array
+
+                # 归一化处理
+                min_val = np.min(image_array)
+                max_val = np.max(image_array)
+                if max_val - min_val != 0:
+                    image_array = (image_array - min_val) / (max_val - min_val)
+                image_array = (image_array * 255).astype(np.uint8)
+
+                # 转换为 PNG
+                img_stream = io.BytesIO()
+                Image.fromarray(image_array).save(img_stream, format="PNG")
+                converted_images[file_name + ".png"] = img_stream.getvalue()
+
+            except Exception as e:
+                print(f"Failed to convert {file_name}: {e}")
+
+        # 并发处理
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            executor.map(lambda item: process_single_file(*item), dicom_files.items())
 
 
-# 示例用法
-if __name__ == "__main__":
-    input_directory = "DICOM"
-    output_directory = "output"
+        return converted_images
+    @staticmethod
+    def convert_to_disk(dicom_files: Dict[str, bytes], output_dir: str) -> None:
+        """
+        将 DICOM 文件转换为 PNG，并将结果直接保存到指定的磁盘目录中。
 
-    converter = DicomToPngConverter(input_directory, output_directory, workers=8)
-    converter.convert_all()
+        :param dicom_files: 包含 DICOM 文件数据的字典，键为文件名，值为文件的字节数据。
+        :param output_dir: 输出目录路径，转换后的 PNG 文件将保存在此目录中。
+        """
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        def process_single_file(file_name, file_bytes):
+            try:
+                dicom_data = pydicom.dcmread(io.BytesIO(file_bytes), force=True)
+
+                if not hasattr(dicom_data, "PixelData"):
+                    print(f"Warning: {file_name} has no Pixel Data.")
+                    return
+
+                dicom_data.decompress()
+                image_array = dicom_data.pixel_array.astype(np.float32)
+
+                if hasattr(dicom_data, 'RescaleSlope') and hasattr(dicom_data, 'RescaleIntercept'):
+                    image_array = image_array * float(dicom_data.RescaleSlope) + float(dicom_data.RescaleIntercept)
+
+                if hasattr(dicom_data, 'PhotometricInterpretation') and dicom_data.PhotometricInterpretation == "MONOCHROME1":
+                    image_array = np.max(image_array) - image_array
+
+                min_val = np.min(image_array)
+                max_val = np.max(image_array)
+                if max_val - min_val != 0:
+                    image_array = (image_array - min_val) / (max_val - min_val)
+                image_array = (image_array * 255).astype(np.uint8)
+
+                output_file = os.path.join(output_dir, file_name.replace("\\", "").replace("/", "") + ".png")
+                Image.fromarray(image_array).save(output_file, format="PNG")
+
+            except Exception as e:
+                print(f"Failed to convert {file_name}: {e}")
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            executor.map(lambda item: process_single_file(*item), dicom_files.items())
