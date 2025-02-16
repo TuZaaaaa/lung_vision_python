@@ -1,85 +1,40 @@
-import os
+import io
 import zipfile
 import tarfile
 import rarfile
+from typing import Dict
 
 class ArchiveExtractor:
     """
-    解压缩工具类，支持 ZIP、TAR.GZ、RAR 格式的解压。
+    处理压缩文件，不落地磁盘，直接解压缩并返回文件内容。
     """
 
     @staticmethod
-    def extract_zip(file_path, extract_to):
+    def extract_stream(file_stream: io.BytesIO) -> Dict[str, bytes]:
         """
-        解压 ZIP 文件。
-        :param file_path: ZIP 文件路径
-        :param extract_to: 解压目标目录
+        直接从 BytesIO 解压缩，并返回所有文件的字节数据。
         """
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"文件 {file_path} 不存在")
+        extracted_files = {}
 
-        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_to)
-        print(f"ZIP 文件已解压到 {extract_to}")
+        # ZIP 处理
+        if zipfile.is_zipfile(file_stream):
+            with zipfile.ZipFile(file_stream, 'r') as zip_ref:
+                for name in zip_ref.namelist():
+                    with zip_ref.open(name) as f:
+                        extracted_files[name] = f.read()
 
-    @staticmethod
-    def extract_tar_gz(file_path, extract_to):
-        """
-        解压 TAR.GZ 文件。
-        :param file_path: TAR.GZ 文件路径
-        :param extract_to: 解压目标目录
-        """
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"文件 {file_path} 不存在")
+        # TAR 处理
+        elif tarfile.is_tarfile(file_stream):
+            with tarfile.open(fileobj=file_stream, mode='r:*') as tar_ref:
+                for member in tar_ref.getmembers():
+                    if member.isfile():
+                        extracted_files[member.name] = tar_ref.extractfile(member).read()
 
-        with tarfile.open(file_path, 'r:gz') as tar_ref:
-            tar_ref.extractall(extract_to)
-        print(f"TAR.GZ 文件已解压到 {extract_to}")
+        # RAR 处理
+        elif file_stream.name.endswith(".rar"):
+            with rarfile.RarFile(file_stream, 'r') as rar_ref:
+                for name in rar_ref.namelist():
+                    with rar_ref.open(name) as f:
+                        extracted_files[name] = f.read()
 
-    @staticmethod
-    def extract_rar(file_path, extract_to):
-        """
-        解压 RAR 文件。
-        :param file_path: RAR 文件路径
-        :param extract_to: 解压目标目录
-        """
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"文件 {file_path} 不存在")
-
-        with rarfile.RarFile(file_path, 'r') as rar_ref:
-            rar_ref.extractall(extract_to)
-        print(f"RAR 文件已解压到 {extract_to}")
-
-    @staticmethod
-    def extract(file_path, extract_to):
-        """
-        自动识别文件格式并解压。
-        :param file_path: 压缩文件路径
-        :param extract_to: 解压目标目录
-        """
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"文件 {file_path} 不存在")
-
-        if file_path.endswith('.zip'):
-            ArchiveExtractor.extract_zip(file_path, extract_to)
-        elif file_path.endswith('.tar.gz') or file_path.endswith('.tgz'):
-            ArchiveExtractor.extract_tar_gz(file_path, extract_to)
-        elif file_path.endswith('.rar'):
-            ArchiveExtractor.extract_rar(file_path, extract_to)
-        else:
-            raise ValueError(f"不支持的文件格式: {file_path}")
-
-
-# 示例用法
-if __name__ == "__main__":
-    # 解压 ZIP 文件
-    ArchiveExtractor.extract('example.zip', 'extracted_files')
-
-    # 解压 TAR.GZ 文件
-    ArchiveExtractor.extract('example.tar.gz', 'extracted_files')
-
-    # 解压 RAR 文件
-    ArchiveExtractor.extract('example.rar', 'extracted_files')
-
-    # 自动识别文件格式并解压
-    ArchiveExtractor.extract('example.zip', 'extracted_files')
+        return extracted_files
