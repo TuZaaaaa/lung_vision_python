@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 import tempfile
@@ -225,20 +226,23 @@ def report_generate():
     if len(input_files) < image_example_nums:
         return Result.error('暂无图像数据，请先进行图像处理').to_response()
 
-    generate_report(
-        output_filename="report.pdf",
+    # 使用 BytesIO 存储 PDF 文件数据，而不是保存到磁盘
+    pdf_output = generate_report(
         patient_name=patient_info['name'],
         age=patient_info['age'],
-        gender= "男" if patient_info['gender'] == "MALE" else "女",
+        gender="男" if patient_info['gender'] == "MALE" else "女",
         exam_date=study_info['study_date'],
         exam_number=study_info['id'],
         pixel_sum=study_info['pixel_sum'],
         input_files=input_files
     )
 
-    return Result.success().to_response()
+    # 返回 PDF 内容作为响应
+    # return jsonify({'pdf': pdf_output.getvalue().decode('latin1')})  # Use Latin1 for safe encoding
+    return Result.success_with_data({'pdf': base64.b64encode(pdf_output.getvalue()).decode('utf-8')}).to_response()
 
-def generate_report(output_filename, exam_date, exam_number, patient_name, age, gender, pixel_sum, input_files):
+
+def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum, input_files):
     """
     生成检查报告 PDF
     """
@@ -251,7 +255,9 @@ def generate_report(output_filename, exam_date, exam_number, patient_name, age, 
     if len(input_files) != 4:
         raise ValueError("必须提供4个检查结果图片的字节数据。")
 
-    doc = SimpleDocTemplate(output_filename, pagesize=A4)
+    # Use BytesIO to create an in-memory PDF
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
     elements = []
     report_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -266,7 +272,6 @@ def generate_report(output_filename, exam_date, exam_number, patient_name, age, 
         f"姓名：{patient_name}<br/>"
         f"年龄：{age}<br/>"
         f"性别：{gender}<br/><br/>"
-
         f"检查日期：{exam_date}<br/>"
         f"检查编号：{exam_number}<br/>"
         f"像素总数：{pixel_sum}<br/><br/>"
@@ -275,60 +280,47 @@ def generate_report(output_filename, exam_date, exam_number, patient_name, age, 
     elements.append(Paragraph(info_text, chinese_style))
     elements.append(Spacer(1, 12))
 
-
     # 创建一个表格数据列表，每行两个图像
     table_data = []
 
-    # 遍历 input_files，按照每行两个图像来排列
     row = []
     for image_name, image_bytes in input_files.items():
-        # 读取图像数据
         image_stream = io.BytesIO(image_bytes)
         pil_img = PILImage.open(image_stream)
 
-        # 将图像保存到 BytesIO 对象
         temp_io = io.BytesIO()
         pil_img.save(temp_io, format='PNG')
-        temp_io.seek(0)  # 重置流指针到文件开始位置
+        temp_io.seek(0)
 
-        # 使用 PlatypusImage 从内存中的 BytesIO 对象而不是磁盘文件
-        img = PlatypusImage(temp_io, width=200, height=150)  # 设置每张图片的尺寸
-
-        # 将图像添加到当前行
+        img = PlatypusImage(temp_io, width=200, height=150)
         row.append(img)
 
-        # 如果当前行有两个图像，就添加到表格数据
         if len(row) == 2:
             table_data.append(row)
-            row = []  # 重置当前行
+            row = []
 
-    # 如果最后一行不足两个图像，将剩余的图像添加到表格
     if row:
         table_data.append(row)
 
-    # 设置行间距和列间距
-    row_heights = [160] * len(table_data)  # 每行的高度，可以增加一些间距
-    col_widths = [220, 220]  # 每列的宽度，适当增大列宽
+    row_heights = [160] * len(table_data)
+    col_widths = [220, 220]
 
-    # 创建表格并添加到元素中
     table = Table(
         table_data,
-        colWidths=col_widths,  # 设置列宽
-        rowHeights=row_heights,  # 设置行高
+        colWidths=col_widths,
+        rowHeights=row_heights,
     )
 
-    # 使用 TableStyle 添加额外的间距和填充
     table.setStyle(TableStyle([
-        ('PAD', (0, 0), (-1, -1), 10),  # 增加内边距，调整图片之间的间距
+        ('PAD', (0, 0), (-1, -1), 10),
     ]))
 
     elements.append(table)
-
-    # 生成报告
     doc.build(elements)
 
-
-    print(f"报告已生成：{output_filename}")
+    # Rewind the buffer to the beginning of the BytesIO object
+    buffer.seek(0)
+    return buffer
 
 if __name__ == '__main__':
     app.run()
