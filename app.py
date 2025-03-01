@@ -193,6 +193,7 @@ def report_generate():
     if not study_id:
         return Result.error('检查id 不存在').to_response()
 
+    start_time = time.time()  # 记录结束时间
     # 数据库初始化
     mongo_tool = MongoDBTool(db_name="mongo_vision", collection_name="dicom_images")
     mysql_tool = MySQLTool(host="localhost", user="root", password="root", database="db_vision")
@@ -236,6 +237,16 @@ def report_generate():
         pixel_sum=study_info['pixel_sum'],
         input_files=input_files
     )
+
+    end_time = time.time()  # 记录结束时间
+    mysql_tool.insert(
+        "INSERT INTO task (name, type, created_at, finished_at, task_status, status) VALUES (%s, %s, %s, %s, %s, %s);",
+        ('报告生成', 'PROCESS', time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)), time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)), 'FINISHED', 'ENABLE')
+    )
+
+    # Close database connections
+    mongo_tool.close_connection()
+    mysql_tool.close_connection()
 
     # 返回 PDF 内容作为响应
     # return jsonify({'pdf': pdf_output.getvalue().decode('latin1')})  # Use Latin1 for safe encoding
