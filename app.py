@@ -2,6 +2,8 @@ import base64
 import io
 import os
 import tempfile
+import threading
+
 import time
 from datetime import datetime
 
@@ -30,6 +32,7 @@ app = Flask(__name__)
 # 配置日志
 logger.add("app.log", rotation="500 MB", retention="10 days", compression="zip")
 
+tasks = {}
 
 @app.route('/lvs-py-api/upload', methods=['POST'])
 def upload_file():
@@ -101,21 +104,36 @@ def upload_file():
     return Result.success().to_response()
 
 @app.route('/lvs-py-api/image_process', methods=['POST'])
-def image_process():
+def create_task():
+    task_id = str(len(tasks) + 1)  # 任务 ID
+    tasks[task_id] = {"status": "processing", "result": None}
+    # 启动后台线程
+    thread = threading.Thread(target=image_process, args=(request.get_json(), task_id))
+    thread.start()
+    return Result.success_with_data({"task_id": task_id, "status": "processing" ,"message": "处理中"}).to_response()
+@app.route('/lvs-py-api/task_status/<task_id>', methods=['GET'])
+def get_task_status(task_id):
+    task = tasks[task_id]
+    if task["status"] == "processing":
+        return Result.success_with_data({"task_id": task_id, "status": "processing" ,"message": "处理中"}).to_response()
+    elif task["status"] == "finished":
+        return Result.success_with_data({"task_id": task_id, "status": "finished" ,"message": "处理完成"}).to_response()
+    else:
+        return Result.error("任务不存在").to_response()
+def image_process(json_data, task_id):
     # 数据库初始化
     mongo_tool = MongoDBTool(db_name="mongo_vision", collection_name="dicom_images")
     mysql_tool = MySQLTool(host="localhost", user="root", password="root", database="db_vision")
 
     start_time = time.time()  # 记录开始时间
-    json_data = request.get_json()
 
     study_id = json_data.get('studyId')
     if not study_id:
+        tasks[task_id] = {"status": "error", "result": "检查id 不存在"}
         return Result.error('检查id 不存在').to_response()
 
     # Retrieve files from MySQL using the study_id
     res = mysql_tool.execute_query('SELECT * FROM file WHERE study_id = %s;', (study_id,))
-
     input_files = {}
     print(res)
     if not 'data' in res.keys():
@@ -183,9 +201,11 @@ def image_process():
     mongo_tool.close_connection()
     mysql_tool.close_connection()
 
+    tasks[task_id] = {"status": "finished", "result": "处理完成"}
     logger.info(f"已处理 {len(result)} 张图片，执行时长：{round(end_time - start_time, 2)} 秒")
+    tasks[task_id] = {"status": "finished", "result": "处理完成"}
+    return
 
-    return Result.success().to_response()
 
 @app.route('/lvs-py-api/report_generate', methods=['POST'])
 def report_generate():
