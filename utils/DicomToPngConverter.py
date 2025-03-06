@@ -2,7 +2,7 @@ import io
 import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict
-
+from loguru import logger
 import numpy as np
 import pydicom
 from PIL import Image
@@ -27,13 +27,23 @@ class DicomToPngConverter:
             try:
                 dicom_data = pydicom.dcmread(io.BytesIO(file_bytes), force=True)
 
-                # 检查 Pixel Data 是否存在
+                # 清理文件名
+                clean_name = os.path.basename(file_name)
+
+                # 检查 Pixel Data
                 if not hasattr(dicom_data, "PixelData"):
-                    print(f"Warning: {file_name} has no Pixel Data.")
+                    logger.warning(f"Skipped {clean_name}: No Pixel Data")
                     return
 
-                # 解码 Pixel Data
-                dicom_data.decompress()
+                # 仅在需要时解压
+                try:
+                    if not dicom_data.is_decompressed:
+                        dicom_data.decompress()
+                except Exception as e:
+                    if "already uncompressed" in str(e):
+                        pass
+                    else:
+                        raise
 
                 # 读取像素数据并转换为浮点型
                 image_array = dicom_data.pixel_array.astype(np.float32)
