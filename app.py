@@ -3,22 +3,11 @@ import io
 import os
 import tempfile
 import threading
-
 import time
-from datetime import datetime
-
 import numpy as np
-from PIL import Image as PILImage
 from bson import ObjectId
 from flask import Flask, request, jsonify
 from loguru import logger
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Image as PlatypusImage
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-
 from common.Result import Result
 from unet.unet_process import process_stream
 from utils.ArchiveExtractor import ArchiveExtractor
@@ -26,7 +15,9 @@ from utils.DicomToPngConverter import DicomToPngConverter
 from utils.MongoDBTool import MongoDBTool
 from utils.MySQLTool import MySQLTool
 from utils.PixelTool import PixelTool
-
+from playwright.sync_api import sync_playwright
+from io import BytesIO
+from PIL import Image
 app = Flask(__name__)
 
 # 配置日志
@@ -272,86 +263,205 @@ def report_generate():
     # return jsonify({'pdf': pdf_output.getvalue().decode('latin1')})  # Use Latin1 for safe encoding
     return Result.success_with_data({'pdf': base64.b64encode(pdf_output.getvalue()).decode('utf-8')}).to_response()
 
-
 def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum, input_files):
     """
-    生成检查报告 PDF
+    使用 Playwright 生成检查报告 PDF
     """
-    pdfmetrics.registerFont(TTFont('SimSun', 'simsun.ttc'))
-    styles = getSampleStyleSheet()
-    chinese_style = ParagraphStyle(
-        'Chinese', parent=styles['Normal'], fontName='SimSun', fontSize=12, leading=15,
-    )
 
     if len(input_files) != 4:
         raise ValueError("必须提供4个检查结果图片的字节数据。")
 
-    # Use BytesIO to create an in-memory PDF
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    elements = []
-    report_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # 获取当前时间
+    now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
-    title_style = ParagraphStyle(
-        'TitleChinese', parent=styles['Title'], fontName='SimSun', fontSize=24, leading=28,
-    )
-    elements.append(Paragraph("医疗检查报告", title_style))
-    elements.append(Spacer(1, 12))
+    # 将字节数据转换为base64编码的字符串
+    def encode_image_to_base64(image_bytes):
+        image_stream = BytesIO(image_bytes)
+        pil_img = Image.open(image_stream)
 
-    info_text = (
-        f"报告生成日期：{report_date}<br/><br/>"
-        f"姓名：{patient_name}<br/>"
-        f"年龄：{age}<br/>"
-        f"性别：{gender}<br/><br/>"
-        f"检查日期：{exam_date}<br/>"
-        f"检查编号：{exam_number}<br/>"
-        f"像素总数：{pixel_sum}<br/><br/>"
-        f"检查示例：<br/>"
-    )
-    elements.append(Paragraph(info_text, chinese_style))
-    elements.append(Spacer(1, 12))
-
-    # 创建一个表格数据列表，每行两个图像
-    table_data = []
-
-    row = []
-    for image_name, image_bytes in input_files.items():
-        image_stream = io.BytesIO(image_bytes)
-        pil_img = PILImage.open(image_stream)
-
-        temp_io = io.BytesIO()
+        # 将图片保存到内存并转换为Base64编码
+        temp_io = BytesIO()
         pil_img.save(temp_io, format='PNG')
         temp_io.seek(0)
 
-        img = PlatypusImage(temp_io, width=200, height=150)
-        row.append(img)
+        # 转换为Base64编码字符串
+        encoded_string = base64.b64encode(temp_io.read()).decode('utf-8')
+        return encoded_string
 
-        if len(row) == 2:
-            table_data.append(row)
-            row = []
+    def encode_file_to_base64(file_path):
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        return base64.b64encode(data).decode('utf-8')
+    # 获取所有图片的Base64编码
+    base64_images = {}
+    for i, (image_name, image_bytes) in enumerate(input_files.items(), 1):
+        base64_images[f'image{i}'] = encode_image_to_base64(image_bytes)
+    logo_base64 = encode_file_to_base64("assets/images/吉大二院logo.jpg")
+    # HTML模板字符串
+    html_template = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <base href="file:///D:/Python/PycharmProjects/lung_vision_python/">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/4.5.2/css/bootstrap.min.css">
 
-    if row:
-        table_data.append(row)
+    <title>Document</title>
+    <style>
+        body {{
+            width: 1000px;
+            height: 800px;
+            margin: 0 auto;
+        }}
+        p {{
+            font-size: 20px;
+        }}
+        img {{
+            margin: 0 auto;
+        }}
+        .study-img {{
+            width: 70%;
+            height: 100%;
+        }}
+        .container {{
+            width: 100%;
+            height: 100%;
+            margin: 0 auto;
+        }}
+        .row {{
+            text-align: center;
+            position: relative;
+            top: 30px;
+        }}  
+        .flex1 {{
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+        }} 
+        .flex2 {{
+            display: flex;
+            justify-content: space-around;
+            width: 100%;
+        }} 
+        .col-12 {{
+            text-align: left;
+        }}
+        .col-6, .col-4 {{
+            flex: 1;
+            text-align: left;
+        }}
+        .title-large {{
+            font-family: "宋体", SimSun, serif;
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: -5px;
+        }}
+        .title-medium {{
+            font-family: "宋体", SimSun, serif;
+            font-size: 25px;
+            font-weight: bold;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="row">
+            <div class="col-12 text-center">
+                <p class="title-large">吉林大学白求恩第二医院</p>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-12 text-center">
+                <p class="title-medium">病理诊断报告</p>
+            </div>
+        </div>
+        <img src="data:image/jpeg;base64,{logo_base64}" alt="吉大二院logo" style="position: relative; width: 100px; height: 100px; bottom: 11%; left: 12%;">
+        <div class="row flex1">
+            <div class="col-6">
+                <p>检查编号:{exam_number}</p>
+            </div>
+            <div class="col-6">
+                <p>申请科室：重症监护室</p>
+            </div>
+        </div>
+        <hr>
+        <div class="row flex1">
+            <div class="col-4">
+                <p>姓名：{patient_name}</p>
+            </div>
+            <div class="col-4">
+                <p>性别：{gender}</p>
+            </div>
+            <div class="col-4">
+                <p>年龄：{age}</p>
+            </div>
+        </div>
+        <div class="row flex1">
+            <div class="col-4">
+                <p>像素总数：{pixel_sum}</p>
+            </div>
+            <div class="col-4">
+                <p>检查日期：{exam_date}</p>
+            </div>
+            <div class="col-4">
+                <p>生成日期：{now}</p>
+            </div>
+        </div>
+        <hr>
+        <div class="row flex1">
+            <div class="col-12">
+                <p>临床诊断：活得很好</p>
+            </div>
+        </div>
+        <hr>
+        <div class="row flex1">
+            <div class="col-12">
+                <p>检查示例：</p>
+            </div>
+        </div>
+        <div class="row flex2">
+            <div class="col-6">
+                <img class="study-img" src="data:image/png;base64,{base64_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+            </div>
+            <div class="col-6">
+                <img class="study-img" src="data:image/png;base64,{base64_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+            </div>
+        </div>
+        <div class="row flex2">
+            <div class="col-6">
+                <img class="study-img" src="data:image/png;base64,{base64_images['image3']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+            </div>
+            <div class="col-6">
+                <img class="study-img" src="data:image/png;base64,{base64_images['image4']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
 
-    row_heights = [160] * len(table_data)
-    col_widths = [220, 220]
+    # 使用 Playwright 将 HTML 转换为 PDF
+    buffer = BytesIO()
+    with sync_playwright() as p:
+        # 启动浏览器
+        browser = p.chromium.launch(args=["--allow-file-access-from-files"])
+        # 创建一个新的页面
+        page = browser.new_page()
+        # 设置页面内容
+        page.set_content(html_template)
+        # 等待页面加载完成
+        page.wait_for_load_state('networkidle')
 
-    table = Table(
-        table_data,
-        colWidths=col_widths,
-        rowHeights=row_heights,
-    )
+        pdf_data = page.pdf(format='A4', margin={'top': '20px', 'bottom': '20px'})
+        # 将数据写入 BytesIO 对象
+        buffer = BytesIO(pdf_data)
+        # 关闭浏览器
+        browser.close()
 
-    table.setStyle(TableStyle([
-        ('PAD', (0, 0), (-1, -1), 10),
-    ]))
-
-    elements.append(table)
-    doc.build(elements)
-
-    # Rewind the buffer to the beginning of the BytesIO object
+    # 将缓冲区的内容返回
     buffer.seek(0)
     return buffer
+
 
 if __name__ == '__main__':
     app.run()
