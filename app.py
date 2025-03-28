@@ -246,7 +246,9 @@ def report_generate():
         exam_date=study_info['study_date'],
         exam_number=study_info['id'],
         pixel_sum=study_info['pixel_sum'],
-        input_files=input_files
+        description=study_info['description'],
+        input_files=input_files,
+        idx_arr=indices
     )
 
     end_time = time.time()  # 记录结束时间
@@ -263,7 +265,7 @@ def report_generate():
     # return jsonify({'pdf': pdf_output.getvalue().decode('latin1')})  # Use Latin1 for safe encoding
     return Result.success_with_data({'pdf': base64.b64encode(pdf_output.getvalue()).decode('utf-8')}).to_response()
 
-def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum, input_files):
+def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum, description, input_files, idx_arr):
     """
     使用 Playwright 生成检查报告 PDF
     """
@@ -302,7 +304,6 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <base href="file:///D:/Python/PycharmProjects/lung_vision_python/">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/4.5.2/css/bootstrap.min.css">
 
@@ -378,7 +379,7 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum
         <img src="data:image/jpeg;base64,{logo_base64}" alt="吉大二院logo" style="position: relative; width: 100px; height: 100px; bottom: 11%; left: 12%;">
         <div class="row flex1">
             <div class="col-6">
-                <p>检查编号:{exam_number}</p>
+                <p>检查编号：{exam_number}</p>
             </div>
             <div class="col-6">
                 <p>申请科室：重症监护室</p>
@@ -410,7 +411,7 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum
         <hr>
         <div class="row flex1">
             <div class="col-12">
-                <p>临床诊断：活得很好</p>
+                <p>临床诊断：{description}</p>
             </div>
         </div>
         <hr>
@@ -422,17 +423,21 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum
         <div class="row flex2">
             <div class="col-6">
                 <img class="study-img" src="data:image/png;base64,{base64_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <p style="text-align: right">{idx_arr[0] + 1}/385 冠状面</p>
             </div>
             <div class="col-6">
                 <img class="study-img" src="data:image/png;base64,{base64_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <p style="text-align: right">{idx_arr[1] + 1}/385 冠状面</p>
             </div>
         </div>
         <div class="row flex2">
             <div class="col-6">
                 <img class="study-img" src="data:image/png;base64,{base64_images['image3']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <p style="text-align: right">{idx_arr[2] + 1}/385 冠状面</p>
             </div>
             <div class="col-6">
                 <img class="study-img" src="data:image/png;base64,{base64_images['image4']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <p style="text-align: right">{idx_arr[3] + 1}/385 冠状面</p>
             </div>
         </div>
     </div>
