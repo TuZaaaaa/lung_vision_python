@@ -476,19 +476,7 @@ def data_clear():
     # 数据库初始化
     mongo_tool = MongoDBTool(db_name="mongo_vision", collection_name="dicom_images")
     mysql_tool = MySQLTool(host="localhost", user="root", password="root", database="db_vision")
-    res = mysql_tool.execute_query("select image_mongo_id, fusion_image_mongo_id, process_mongo_id  from file where study_id = %s", (study_id,))
-
-    id_list = []
-    print(id_list)
-    print(res)
-    for row in res['data']:
-        for record in row:
-            print(record['image_mongo_id'])
-            id_list.append(record['image_mongo_id'])
-            id_list.append(record['fusion_image_mongo_id'])
-            id_list.append(record['process_mongo_id'])
-
-    mongo_tool.delete_many(id_list)
+    mongo_tool.delete_many({"study_id": str(study_id)})
     # 删除 mysql file 记录, 检查记录像素值归零
     mysql_tool.delete("delete from file where study_id = %s", (study_id,))
     mysql_tool.update("update study set pixel_sum = 0 where id = %s", (study_id,))
