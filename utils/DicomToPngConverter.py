@@ -48,6 +48,10 @@ class DicomToPngConverter:
                 # 读取像素数据并转换为浮点型
                 image_array = dicom_data.pixel_array.astype(np.float32)
 
+                # 重排序
+                instance_number = dicom_data.get("InstanceNumber")
+                file_name = str(instance_number)
+
                 # 若存在 RescaleSlope 和 RescaleIntercept，则进行重标定
                 if hasattr(dicom_data, 'RescaleSlope') and hasattr(dicom_data, 'RescaleIntercept'):
                     image_array = image_array * float(dicom_data.RescaleSlope) + float(dicom_data.RescaleIntercept)
