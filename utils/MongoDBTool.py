@@ -74,6 +74,15 @@ class MongoDBTool:
         except PyMongoError as e:
             return {"success": False, "error": str(e)}
 
+    def delete_many(self, filter_query: Dict) -> Dict:
+        """批量删除文档"""
+        try:
+            result = self.collection.delete_many(filter_query)
+
+            return {"success": True, "deleted_count": result.deleted_count}
+        except PyMongoError as e:
+            return {"success": False, "error": str(e)}
+
     def paginated_query(self, filter_query: Optional[Dict] = None, page: int = 1, per_page: int = 10,
                         sort: Optional[List[tuple]] = None) -> Dict:
         """分页查询"""
