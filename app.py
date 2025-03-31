@@ -1,15 +1,20 @@
 import base64
 import io
 import os
+import re
 import tempfile
 import threading
 import time
+from pathlib import Path
+
 import numpy as np
 from bson import ObjectId
 from flask import Flask, request, jsonify
 from loguru import logger
+
 from common.Result import Result
 from unet.unet_process import process_stream
+from utils import MaskProcessTool
 from utils.ArchiveExtractor import ArchiveExtractor
 from utils.DicomToPngConverter import DicomToPngConverter
 from utils.MongoDBTool import MongoDBTool
@@ -48,35 +53,67 @@ def upload_file():
     extracted_files = ArchiveExtractor.extract_stream(file_stream)
 
     if not extracted_files:
-        logger.error('没有合法文件可以进行压缩')
-        return Result.error('没有合法文件可以进行压缩').to_response()
+        logger.error('没有合法文件可以进行解压缩')
+        return Result.error('没有合法文件可以进行解压缩').to_response()
+    if 'data/dicom/' not in extracted_files.keys():
+        return Result.error('dicom 目录缺失').to_response()
+    if 'data/img/' not in extracted_files.keys():
+        return Result.error('img 目录缺失').to_response()
+
+    # 去除多余的目录文件
+    extracted_files = {k:v for k,v in extracted_files.items() if k not in ['data/', 'data/dicom/', 'data/img/'] }
+
+    dicom_files = {name:data for name, data in extracted_files.items() if name.startswith("data/dicom/")}
+    img_files = {name:data for name, data in extracted_files.items() if name.startswith("data/img/")}
+
+    if len(dicom_files) != len(img_files):
+        return Result.error('两个目录文件数量不一致').to_response()
+
 
     logger.info(f"Extracted {len(extracted_files)} files")
 
-    # 转换 DICOM 文件
-    converted_images = DicomToPngConverter.convert_stream(extracted_files)
+    converted_images = DicomToPngConverter.convert_stream(dicom_files)
 
     # test
-    # DicomToPngConverter.convert_to_disk(extracted_files, 'test_dicom_output')
+    # DicomToPngConverter.convert_to_disk(dicom_files, 'test_dicom_output')
     # return Result.success().to_response()
 
+    def natural_sort_key(s):
+        return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
     # 存入 MongoDB
-    mongo_id_to_filename_dict = {}
-    for image_name, image_bytes in converted_images.items():
+    image_mongo_id_to_filename_dict = {}
+    i = 1
+    for image_name, image_bytes in sorted(converted_images.items(), key=lambda x: natural_sort_key(x[0])):
+        path = Path(image_name)
         mongo_result = mongo_tool.insert_one({
             "study_id": study_id,
-            "filename": image_name,
+            "filename": f"{path.stem}_{i}{path.suffix}",
             "image_data": image_bytes
         })
+        i += 1
         if mongo_result["success"]:
-            mongo_id_to_filename_dict[mongo_result["inserted_id"]] = image_name
+            image_mongo_id_to_filename_dict[mongo_result["inserted_id"]] = path.stem
+
+
+    fusion_mongo_id_to_filename_dict = {}
+    i = 1
+    for image_name, image_bytes in img_files.items():
+        path = Path(image_name)
+        mongo_result = mongo_tool.insert_one({
+            "study_id": study_id,
+            "filename": f"{path.stem}_{i}{path.suffix}",
+            "image_data": image_bytes
+        })
+        i += 1
+        if mongo_result["success"]:
+            fusion_mongo_id_to_filename_dict[mongo_result["inserted_id"]] = path.stem
 
     file_number = 1
-    # 存储 ID 到 MySQL
-    for mongo_id, image_name in mongo_id_to_filename_dict.items():
+    for dk, ik in zip(image_mongo_id_to_filename_dict.keys(), fusion_mongo_id_to_filename_dict.keys()):
         mysql_tool.insert(
-            "INSERT INTO file (study_id, file_name, file_number, image_mongo_id) VALUES (%s, %s, %s, %s);",
-            (study_id, image_name.replace("/", ""), file_number, mongo_id)
+            "INSERT INTO file (study_id, file_name, file_number, image_mongo_id, fusion_image_mongo_id) VALUES (%s, %s, %s, %s, %s);",
+            (study_id, image_mongo_id_to_filename_dict[dk], file_number, dk, ik)
         )
         file_number += 1
 
@@ -91,7 +128,7 @@ def upload_file():
     mongo_tool.close_connection()
     mysql_tool.close_connection()
 
-    logger.info(f"已存储 {len(mongo_id_to_filename_dict)} 张图片至 MongoDB 和 MySQL，执行时长：{round(end_time - start_time, 2)} 秒")
+    logger.info(f"已存储 {len(extracted_files)} 张图片至 MongoDB 和 MySQL，执行时长：{round(end_time - start_time, 2)} 秒")
     return Result.success().to_response()
 
 @app.route('/lvs-py-api/image_process', methods=['POST'])
@@ -120,32 +157,42 @@ def image_process(json_data, task_id):
 
     study_id = json_data.get('studyId')
     if not study_id:
-        tasks[task_id] = {"status": "error", "result": "检查id 不存在"}
+        tasks[task_id] = {"status": "error", "mark_images": "检查id 不存在"}
         return Result.error('检查id 不存在').to_response()
 
     # Retrieve files from MySQL using the study_id
     res = mysql_tool.execute_query('SELECT * FROM file WHERE study_id = %s;', (study_id,))
-    input_files = {}
     print(res)
     if not 'data' in res.keys():
         return Result.error('暂无数据，请先进行数据导入').to_response()
 
+    input_files = {}
+    fusion_images = {}
     for row in res['data']:
         for record in row:
             result_doc = mongo_tool.find_one({"_id": ObjectId(record['image_mongo_id'])})
             if result_doc["success"]:
                 # Use a sanitized filename as key
-                input_files[result_doc["data"]["filename"].replace("/", "")] = result_doc["data"]["image_data"]
+                input_files[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+            result_doc = mongo_tool.find_one({"_id": ObjectId(record['fusion_image_mongo_id'])})
+            if result_doc["success"]:
+                # Use a sanitized filename as key
+                fusion_images[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+
 
     # Process the images using the UNet model
-    result = process_stream(input_files)
+    mark_images = process_stream(input_files)
+
+    # 对齐彩图与掩码图
+    process_result_dict = MaskProcessTool.process_ct_images(ct_images=fusion_images, mask_images=mark_images)
 
     # Insert processed images into MongoDB with white pixel count calculated first
     mongo_id_to_filename_dict = {}
-    for image_name, image_bytes in result.items():
+    file_number = 1
+    for mk, pk in zip(mark_images.keys(), process_result_dict.keys()):
         # Write the image bytes to a temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp_file:
-            tmp_file.write(image_bytes)
+            tmp_file.write(mark_images[str(mk)])
             tmp_file_path = tmp_file.name
 
         # Calculate white pixel count using the temporary file
@@ -154,24 +201,25 @@ def image_process(json_data, task_id):
 
         # Insert image along with white_pixel_count into MongoDB
         mongo_result = mongo_tool.insert_one({
-            "study_id": study_id,
-            "filename": image_name,
-            "image_data": image_bytes,
-            "white_pixel_count": white_pixel_count
+            "study_id": str(study_id),
+            "filename": mk,
+            "image_data": process_result_dict[str(pk)],
         })
         if mongo_result["success"]:
             # Adjust the dict to store both the filename and white_pixel_count
             mongo_id_to_filename_dict[mongo_result["inserted_id"]] = {
-                "filename": image_name,
-                "white_pixel_count": white_pixel_count
+                "white_pixel_count": white_pixel_count,
+                "file_number": file_number,
             }
+        file_number += 1
 
     # Insert the processed image details into MySQL, including the white pixel count
     pixel_sum = 0
+
     for mongo_id, info in mongo_id_to_filename_dict.items():
         mysql_tool.update(
-            "update file set process_mongo_id = %s, pixel_num = %s where study_id = %s and file_name = %s;",
-            (mongo_id, info["white_pixel_count"], study_id, info["filename"])
+            "update file set process_mongo_id = %s, pixel_num = %s where study_id = %s and file_number = %s;",
+            (mongo_id, info["white_pixel_count"], study_id, info["file_number"])
         )
         pixel_sum += info["white_pixel_count"]
 
@@ -192,9 +240,9 @@ def image_process(json_data, task_id):
     mongo_tool.close_connection()
     mysql_tool.close_connection()
 
-    tasks[task_id] = {"status": "finished", "result": "处理完成"}
-    logger.info(f"已处理 {len(result)} 张图片，执行时长：{round(end_time - start_time, 2)} 秒")
-    tasks[task_id] = {"status": "finished", "result": "处理完成"}
+    tasks[task_id] = {"status": "finished", "mark_images": "处理完成"}
+    logger.info(f"已处理 {len(mark_images)} 张图片，执行时长：{round(end_time - start_time, 2)} 秒")
+    tasks[task_id] = {"status": "finished", "mark_images": "处理完成"}
     return
 
 
@@ -225,16 +273,19 @@ def report_generate():
     image_example_nums = 4
     res = mysql_tool.execute_query('SELECT * FROM file WHERE study_id = %s;', (study_id,))
     input_files = {}
+
+    indices = []
     for row in res['data']:
         # 挑选平均分布的 4 个编号
         n = len(row)
-        indices = np.linspace(0, n-1, image_example_nums, dtype=int)
+        indices = np.linspace(60, n-131, image_example_nums, dtype=int)
         row = [row[i] for i in indices]
         for record in row:
             result_doc = mongo_tool.find_one({"_id": ObjectId(record['process_mongo_id'])})
             if result_doc["success"]:
-                input_files[result_doc["data"]["filename"].replace("/", "")] = result_doc["data"]["image_data"]
+                input_files[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
 
+    print(len(input_files))
     if len(input_files) < image_example_nums:
         return Result.error('暂无图像数据，请先进行图像处理').to_response()
 
