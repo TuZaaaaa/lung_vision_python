@@ -55,7 +55,7 @@ def process_stream(input_files: dict) -> dict:
             # Permute to (H, W, 1) and convert to NumPy array
             out = out.permute((1, 2, 0)).cpu().detach().numpy()
             # Replace numpy.resize with cv2.resize for proper image scaling
-            # out = cv2.resize(out, (512, 512), interpolation=cv2.INTER_NEAREST)
+            out = cv2.resize(out, (512, 512), interpolation=cv2.INTER_NEAREST)
 
         # Multiply by 255.0 as in test.py and convert to uint8 type
         out = (out * 255.0).astype(np.uint8)
@@ -63,9 +63,11 @@ def process_stream(input_files: dict) -> dict:
         # Encode the processed image as PNG
         success, encoded_image = cv2.imencode('.png', out)
         if success:
-            out_filename = os.path.splitext(filename)[0] + '.png'
-            output_files[out_filename] = encoded_image.tobytes()
-            print(f"Processed: {filename} -> {out_filename}")
+            # out_filename = os.path.splitext(filename)[0] + '.png'
+            # output_files[out_filename] = encoded_image.tobytes()
+            # print(f"Processed: {filename} -> {out_filename}")
+            output_files[filename] = encoded_image.tobytes()
+            print(f"Processed: {filename} -> {filename}")
         else:
             print(f"Failed to encode image: {filename}")
 
