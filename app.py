@@ -46,6 +46,12 @@ def upload_file():
         logger.error("No file uploaded")
         return jsonify({'error': 'No file uploaded'}), 400
 
+    res = mysql_tool.execute_query('SELECT process_status FROM study WHERE id = %s;', (study_id,))
+    for row in res['data']:
+        for record in row:
+            if record['process_status'] != '未导入':
+                return Result.error('重复导入请先清空数据').to_response()
+
     # 直接使用 BytesIO 避免文件写入磁盘
     file_stream = io.BytesIO(file.read())
 
@@ -57,17 +63,20 @@ def upload_file():
         return Result.error('没有合法文件可以进行解压缩').to_response()
     if 'data/dicom/' not in extracted_files.keys():
         return Result.error('dicom 目录缺失').to_response()
-    if 'data/img/' not in extracted_files.keys():
-        return Result.error('img 目录缺失').to_response()
+    if 'data/img_p/' not in extracted_files.keys():
+        return Result.error('img_p 目录缺失').to_response()
+    if 'data/img_v/' not in extracted_files.keys():
+        return Result.error('img_v 目录缺失').to_response()
 
     # 去除多余的目录文件
-    extracted_files = {k:v for k,v in extracted_files.items() if k not in ['data/', 'data/dicom/', 'data/img/'] }
+    extracted_files = {k:v for k,v in extracted_files.items() if k not in ['data/', 'data/dicom/', 'data/img_p/', 'data/img_v/'] }
 
     dicom_files = {name:data for name, data in extracted_files.items() if name.startswith("data/dicom/")}
-    img_files = {name:data for name, data in extracted_files.items() if name.startswith("data/img/")}
+    img_p_files = {name:data for name, data in extracted_files.items() if name.startswith("data/img_p/")}
+    img_v_files = {name:data for name, data in extracted_files.items() if name.startswith("data/img_v/")}
 
-    if len(dicom_files) != len(img_files):
-        return Result.error('两个目录文件数量不一致').to_response()
+    if len(dicom_files) != len(img_p_files) | len(dicom_files) != len(img_v_files):
+        return Result.error('3 个目录文件数量不一致').to_response()
 
 
     logger.info(f"Extracted {len(extracted_files)} files")
@@ -96,9 +105,9 @@ def upload_file():
             image_mongo_id_to_filename_dict[mongo_result["inserted_id"]] = path.stem
 
 
-    fusion_mongo_id_to_filename_dict = {}
+    image_p_mongo_id_to_filename_dict = {}
     i = 1
-    for image_name, image_bytes in img_files.items():
+    for image_name, image_bytes in img_p_files.items():
         path = Path(image_name)
         mongo_result = mongo_tool.insert_one({
             "study_id": study_id,
@@ -107,16 +116,35 @@ def upload_file():
         })
         i += 1
         if mongo_result["success"]:
-            fusion_mongo_id_to_filename_dict[mongo_result["inserted_id"]] = path.stem
+            image_p_mongo_id_to_filename_dict[mongo_result["inserted_id"]] = path.stem
+
+    image_v_mongo_id_to_filename_dict = {}
+    i = 1
+    for image_name, image_bytes in img_p_files.items():
+        path = Path(image_name)
+        mongo_result = mongo_tool.insert_one({
+            "study_id": study_id,
+            "filename": f"{path.stem}_{i}{path.suffix}",
+            "image_data": image_bytes
+        })
+        i += 1
+        if mongo_result["success"]:
+            image_v_mongo_id_to_filename_dict[mongo_result["inserted_id"]] = path.stem
 
     file_number = 1
-    for dk, ik in zip(image_mongo_id_to_filename_dict.keys(), fusion_mongo_id_to_filename_dict.keys()):
+    for dk, pk, vk in zip(image_mongo_id_to_filename_dict.keys(), image_p_mongo_id_to_filename_dict.keys(), image_v_mongo_id_to_filename_dict.keys()):
         mysql_tool.insert(
-            "INSERT INTO file (study_id, file_name, file_number, image_mongo_id, fusion_image_mongo_id) VALUES (%s, %s, %s, %s, %s);",
-            (study_id, image_mongo_id_to_filename_dict[dk], file_number, dk, ik)
+            "INSERT INTO file (study_id, file_name, file_number, image_mongo_id, image_p_mongo_id, image_v_mongo_id) VALUES (%s, %s, %s, %s, %s, %s);",
+            (study_id, image_mongo_id_to_filename_dict[dk], file_number, dk, pk, vk)
         )
         file_number += 1
 
+
+    # 更新状态
+    mysql_tool.update(
+        "update study set process_status = %s, file_num = %s where id = %s",
+        ("已导入", len(dicom_files), study_id)
+    )
 
     end_time = time.time()  # 记录结束时间
     mysql_tool.insert(
@@ -166,30 +194,34 @@ def image_process(json_data, task_id):
     if not 'data' in res.keys():
         return Result.error('暂无数据，请先进行数据导入').to_response()
 
-    input_files = {}
-    fusion_images = {}
+    image_files = {}
+    image_p_images = {}
+    image_v_images = {}
     for row in res['data']:
         for record in row:
             result_doc = mongo_tool.find_one({"_id": ObjectId(record['image_mongo_id'])})
             if result_doc["success"]:
-                # Use a sanitized filename as key
-                input_files[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
-            result_doc = mongo_tool.find_one({"_id": ObjectId(record['fusion_image_mongo_id'])})
+                image_files[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+            result_doc = mongo_tool.find_one({"_id": ObjectId(record['image_p_mongo_id'])})
             if result_doc["success"]:
-                # Use a sanitized filename as key
-                fusion_images[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+                image_p_images[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+            result_doc = mongo_tool.find_one({"_id": ObjectId(record['image_v_mongo_id'])})
+            if result_doc["success"]:
+                image_v_images[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
 
 
     # Process the images using the UNet model
-    mark_images = process_stream(input_files)
+    mark_images = process_stream(image_files)
 
     # 对齐彩图与掩码图
-    process_result_dict = MaskProcessTool.process_ct_images(ct_images=fusion_images, mask_images=mark_images)
+    process_p_result_dict = MaskProcessTool.process_ct_images(ct_images=image_p_images, mask_images=mark_images)
+    process_v_result_dict = MaskProcessTool.process_ct_images(ct_images=image_v_images, mask_images=mark_images)
 
     # Insert processed images into MongoDB with white pixel count calculated first
-    mongo_id_to_filename_dict = {}
+    mongo_id_to_filename_p_dict = {}
+    mongo_id_to_filename_v_dict = {}
     file_number = 1
-    for mk, pk in zip(mark_images.keys(), process_result_dict.keys()):
+    for mk, pk, vk in zip(mark_images.keys(), process_p_result_dict.keys(), process_v_result_dict.keys()):
         # Write the image bytes to a temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp_file:
             tmp_file.write(mark_images[str(mk)])
@@ -203,11 +235,24 @@ def image_process(json_data, task_id):
         mongo_result = mongo_tool.insert_one({
             "study_id": str(study_id),
             "filename": mk,
-            "image_data": process_result_dict[str(pk)],
+            "image_data": process_p_result_dict[str(pk)],
         })
         if mongo_result["success"]:
             # Adjust the dict to store both the filename and white_pixel_count
-            mongo_id_to_filename_dict[mongo_result["inserted_id"]] = {
+            mongo_id_to_filename_p_dict[mongo_result["inserted_id"]] = {
+                "white_pixel_count": white_pixel_count,
+                "file_number": file_number,
+            }
+
+        # Insert image along with white_pixel_count into MongoDB
+        mongo_result = mongo_tool.insert_one({
+            "study_id": str(study_id),
+            "filename": mk,
+            "image_data": process_v_result_dict[str(vk)],
+        })
+        if mongo_result["success"]:
+            # Adjust the dict to store both the filename and white_pixel_count
+            mongo_id_to_filename_v_dict[mongo_result["inserted_id"]] = {
                 "white_pixel_count": white_pixel_count,
                 "file_number": file_number,
             }
@@ -216,16 +261,30 @@ def image_process(json_data, task_id):
     # Insert the processed image details into MySQL, including the white pixel count
     pixel_sum = 0
 
-    for mongo_id, info in mongo_id_to_filename_dict.items():
+    for mongo_id, info in mongo_id_to_filename_p_dict.items():
         mysql_tool.update(
-            "update file set process_mongo_id = %s, pixel_num = %s where study_id = %s and file_number = %s;",
+            "update file set process_p_mongo_id = %s, pixel_num_p = %s where study_id = %s and file_number = %s;",
             (mongo_id, info["white_pixel_count"], study_id, info["file_number"])
         )
         pixel_sum += info["white_pixel_count"]
 
     mysql_tool.update(
-        "update study set pixel_sum = %s where id = %s",
+        "update study set pixel_p_sum = %s where id = %s",
         (pixel_sum, study_id)
+    )
+
+    pixel_sum = 0
+    for mongo_id, info in mongo_id_to_filename_v_dict.items():
+        mysql_tool.update(
+            "update file set process_v_mongo_id = %s, pixel_num_v = %s where study_id = %s and file_number = %s;",
+            (mongo_id, info["white_pixel_count"], study_id, info["file_number"])
+        )
+        pixel_sum += info["white_pixel_count"]
+
+    end_time = time.time()  # 记录结束时间
+    mysql_tool.update(
+        "update study set pixel_v_sum = %s, process_status = %s, execute_time = %s where id = %s",
+        (pixel_sum, "已处理", round(end_time - start_time, 2), study_id)
     )
 
 
@@ -270,23 +329,36 @@ def report_generate():
     print(patient_info)
 
     # 选取示例图片
-    image_example_nums = 4
+    # 挑选平均分布的 2 个编号
+    image_example_nums = 2
     res = mysql_tool.execute_query('SELECT * FROM file WHERE study_id = %s;', (study_id,))
-    input_files = {}
+    input_p_files = {}
+    input_v_files = {}
 
     indices = []
     for row in res['data']:
-        # 挑选平均分布的 4 个编号
         n = len(row)
         indices = np.linspace(60, n-131, image_example_nums, dtype=int)
         row = [row[i] for i in indices]
         for record in row:
-            result_doc = mongo_tool.find_one({"_id": ObjectId(record['process_mongo_id'])})
+            result_doc = mongo_tool.find_one({"_id": ObjectId(record['process_p_mongo_id'])})
             if result_doc["success"]:
-                input_files[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+                input_p_files[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+            result_doc = mongo_tool.find_one({"_id": ObjectId(record['process_v_mongo_id'])})
+            if result_doc["success"]:
+                input_v_files[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+    # test for save full output
+    # os.makedirs('p_output', exist_ok=True)
+    # for filename, image_data in input_p_files.items():
+    #     with open(os.path.join('output', filename), 'wb') as f:
+    #         f.write(image_data)
+    # os.makedirs('v_output', exist_ok=True)
+    # for filename, image_data in input_v_files.items():
+    #     with open(os.path.join('output', filename), 'wb') as f:
+    #         f.write(image_data)
 
-    print(len(input_files))
-    if len(input_files) < image_example_nums:
+    print(len(input_p_files))
+    if len(input_p_files) < image_example_nums:
         return Result.error('暂无图像数据，请先进行图像处理').to_response()
 
     # 使用 BytesIO 存储 PDF 文件数据，而不是保存到磁盘
@@ -296,9 +368,10 @@ def report_generate():
         gender="男" if patient_info['gender'] == "MALE" else "女",
         exam_date=study_info['study_date'],
         exam_number=study_info['id'],
-        pixel_sum=study_info['pixel_sum'],
+        ventilation_perfusion_ratio=study_info['ventilation_perfusion_ratio'],
         description=study_info['description'],
-        input_files=input_files,
+        input_p_files=input_p_files,
+        input_v_files=input_v_files,
         idx_arr=indices
     )
 
@@ -316,13 +389,10 @@ def report_generate():
     # return jsonify({'pdf': pdf_output.getvalue().decode('latin1')})  # Use Latin1 for safe encoding
     return Result.success_with_data({'pdf': base64.b64encode(pdf_output.getvalue()).decode('utf-8')}).to_response()
 
-def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum, description, input_files, idx_arr):
+def generate_report(patient_name, age, gender, exam_date, exam_number, ventilation_perfusion_ratio, description, input_p_files, input_v_files, idx_arr):
     """
     使用 Playwright 生成检查报告 PDF
     """
-
-    if len(input_files) != 4:
-        raise ValueError("必须提供4个检查结果图片的字节数据。")
 
     # 获取当前时间
     now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -346,9 +416,12 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum
             data = f.read()
         return base64.b64encode(data).decode('utf-8')
     # 获取所有图片的Base64编码
-    base64_images = {}
-    for i, (image_name, image_bytes) in enumerate(input_files.items(), 1):
-        base64_images[f'image{i}'] = encode_image_to_base64(image_bytes)
+    base64_p_images = {}
+    for i, (image_name, image_bytes) in enumerate(input_p_files.items(), 1):
+        base64_p_images[f'image{i}'] = encode_image_to_base64(image_bytes)
+    base64_v_images = {}
+    for i, (image_name, image_bytes) in enumerate(input_v_files.items(), 1):
+        base64_v_images[f'image{i}'] = encode_image_to_base64(image_bytes)
     logo_base64 = encode_file_to_base64("assets/images/吉大二院logo.jpg")
     # HTML模板字符串
     html_template = f"""<!DOCTYPE html>
@@ -450,7 +523,7 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum
         </div>
         <div class="row flex1">
             <div class="col-4">
-                <p>像素总数：{pixel_sum}</p>
+                <p>通气血流比：{ventilation_perfusion_ratio}</p>
             </div>
             <div class="col-4">
                 <p>检查日期：{exam_date}</p>
@@ -468,29 +541,37 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, pixel_sum
         <hr>
         <div class="row flex1">
             <div class="col-12">
-                <p>检查示例：</p>
+                <p>血灌注检查示例：</p>
             </div>
         </div>
         <div class="row flex2">
             <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <img class="study-img" src="data:image/png;base64,{base64_p_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
                 <p style="text-align: right">{idx_arr[0] + 1}/385 冠状面</p>
             </div>
             <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <img class="study-img" src="data:image/png;base64,{base64_p_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
                 <p style="text-align: right">{idx_arr[1] + 1}/385 冠状面</p>
+            </div>
+        </div>
+
+        
+        <div class="row flex1">
+            <div class="col-12">
+                <p>通气检查示例：</p>
             </div>
         </div>
         <div class="row flex2">
             <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_images['image3']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
-                <p style="text-align: right">{idx_arr[2] + 1}/385 冠状面</p>
+                <img class="study-img" src="data:image/png;base64,{base64_v_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <p style="text-align: right">{idx_arr[0] + 1}/385 冠状面</p>
             </div>
             <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_images['image4']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
-                <p style="text-align: right">{idx_arr[3] + 1}/385 冠状面</p>
+                <img class="study-img" src="data:image/png;base64,{base64_v_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <p style="text-align: right">{idx_arr[1] + 1}/385 冠状面</p>
             </div>
         </div>
+
     </div>
 </body>
 </html>
@@ -530,7 +611,7 @@ def data_clear():
     mongo_tool.delete_many({"study_id": str(study_id)})
     # 删除 mysql file 记录, 检查记录像素值归零
     mysql_tool.delete("delete from file where study_id = %s", (study_id,))
-    mysql_tool.update("update study set pixel_sum = 0 where id = %s", (study_id,))
+    mysql_tool.update("update study set pixel_p_sum = 0, pixel_v_sum = 0, process_status = '未导入', file_num = %s, execute_time = %s where id = %s", (0, 0, study_id,))
 
     mongo_tool.close_connection()
     mysql_tool.close_connection()
