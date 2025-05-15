@@ -120,7 +120,7 @@ def upload_file():
 
     image_v_mongo_id_to_filename_dict = {}
     i = 1
-    for image_name, image_bytes in img_p_files.items():
+    for image_name, image_bytes in img_v_files.items():
         path = Path(image_name)
         mongo_result = mongo_tool.insert_one({
             "study_id": study_id,
@@ -350,11 +350,11 @@ def report_generate():
     # test for save full output
     # os.makedirs('p_output', exist_ok=True)
     # for filename, image_data in input_p_files.items():
-    #     with open(os.path.join('output', filename), 'wb') as f:
+    #     with open(os.path.join('p_output', filename), 'wb') as f:
     #         f.write(image_data)
     # os.makedirs('v_output', exist_ok=True)
     # for filename, image_data in input_v_files.items():
-    #     with open(os.path.join('output', filename), 'wb') as f:
+    #     with open(os.path.join('v_output', filename), 'wb') as f:
     #         f.write(image_data)
 
     print(len(input_p_files))
@@ -611,7 +611,7 @@ def data_clear():
     mongo_tool.delete_many({"study_id": str(study_id)})
     # 删除 mysql file 记录, 检查记录像素值归零
     mysql_tool.delete("delete from file where study_id = %s", (study_id,))
-    mysql_tool.update("update study set pixel_p_sum = 0, pixel_v_sum = 0, process_status = '未导入', file_num = %s, execute_time = %s where id = %s", (0, 0, study_id,))
+    mysql_tool.update("update study set pixel_p_sum = 0, pixel_v_sum = 0, process_status = '未导入', file_num = 0, execute_time = 0 where id = %s", (study_id,))
 
     mongo_tool.close_connection()
     mysql_tool.close_connection()
