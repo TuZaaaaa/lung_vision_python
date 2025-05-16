@@ -23,6 +23,9 @@ from utils.PixelTool import PixelTool
 from playwright.sync_api import sync_playwright
 from io import BytesIO
 from PIL import Image
+
+from utils.VQAnalyzer import VQAnalyzer
+
 app = Flask(__name__)
 
 # 配置日志
@@ -217,6 +220,10 @@ def image_process(json_data, task_id):
     process_p_result_dict = MaskProcessTool.process_ct_images(ct_images=image_p_images, mask_images=mark_images)
     process_v_result_dict = MaskProcessTool.process_ct_images(ct_images=image_v_images, mask_images=mark_images)
 
+    analyzer = VQAnalyzer()
+    ventilation_perfusion_ratio = analyzer.analyze_dicts(process_v_result_dict, process_p_result_dict)
+    print("平均V/Q比值：", ventilation_perfusion_ratio)
+
     # Insert processed images into MongoDB with white pixel count calculated first
     mongo_id_to_filename_p_dict = {}
     mongo_id_to_filename_v_dict = {}
@@ -269,8 +276,8 @@ def image_process(json_data, task_id):
         pixel_sum += info["white_pixel_count"]
 
     mysql_tool.update(
-        "update study set pixel_p_sum = %s where id = %s",
-        (pixel_sum, study_id)
+        "update study set pixel_p_sum = %s, ventilation_perfusion_ratio = %s where id = %s",
+        (pixel_sum, round(float(ventilation_perfusion_ratio), 2), study_id)
     )
 
     pixel_sum = 0
@@ -329,11 +336,12 @@ def report_generate():
     print(patient_info)
 
     # 选取示例图片
-    # 挑选平均分布的 2 个编号
-    image_example_nums = 2
+    # 挑选平均分布的 4 个编号
+    image_example_nums = 4
     res = mysql_tool.execute_query('SELECT * FROM file WHERE study_id = %s;', (study_id,))
     input_p_files = {}
     input_v_files = {}
+    analyzer = VQAnalyzer()
 
     indices = []
     for row in res['data']:
@@ -361,6 +369,7 @@ def report_generate():
     if len(input_p_files) < image_example_nums:
         return Result.error('暂无图像数据，请先进行图像处理').to_response()
 
+    result_files = analyzer.analyze_and_visualize_dicts(input_v_files, input_p_files)
     # 使用 BytesIO 存储 PDF 文件数据，而不是保存到磁盘
     pdf_output = generate_report(
         patient_name=patient_info['name'],
@@ -372,6 +381,7 @@ def report_generate():
         description=study_info['description'],
         input_p_files=input_p_files,
         input_v_files=input_v_files,
+        result_files=result_files,
         idx_arr=indices
     )
 
@@ -389,7 +399,7 @@ def report_generate():
     # return jsonify({'pdf': pdf_output.getvalue().decode('latin1')})  # Use Latin1 for safe encoding
     return Result.success_with_data({'pdf': base64.b64encode(pdf_output.getvalue()).decode('utf-8')}).to_response()
 
-def generate_report(patient_name, age, gender, exam_date, exam_number, ventilation_perfusion_ratio, description, input_p_files, input_v_files, idx_arr):
+def generate_report(patient_name, age, gender, exam_date, exam_number, ventilation_perfusion_ratio, description, input_p_files, input_v_files, result_files, idx_arr):
     """
     使用 Playwright 生成检查报告 PDF
     """
@@ -423,6 +433,9 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, ventilati
     for i, (image_name, image_bytes) in enumerate(input_v_files.items(), 1):
         base64_v_images[f'image{i}'] = encode_image_to_base64(image_bytes)
     logo_base64 = encode_file_to_base64("assets/images/吉大二院logo.jpg")
+    base64_r_images = {}
+    for i, (image_name, image_bytes) in enumerate(result_files.items(), 1):
+        base64_r_images[f'image{i}'] = encode_image_to_base64(image_bytes)
     # HTML模板字符串
     html_template = f"""<!DOCTYPE html>
 <html lang="en">
@@ -546,31 +559,24 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, ventilati
         </div>
         <div class="row flex2">
             <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_p_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <img class="study-img" src="data:image/png;base64,{base64_r_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
                 <p style="text-align: right">{idx_arr[0] + 1}/385 冠状面</p>
             </div>
             <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_p_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <img class="study-img" src="data:image/png;base64,{base64_r_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
                 <p style="text-align: right">{idx_arr[1] + 1}/385 冠状面</p>
+            </div>
+            <div class="col-6">
+                <img class="study-img" src="data:image/png;base64,{base64_r_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <p style="text-align: right">{idx_arr[2] + 1}/385 冠状面</p>
+            </div>
+            <div class="col-6">
+                <img class="study-img" src="data:image/png;base64,{base64_r_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <p style="text-align: right">{idx_arr[3] + 1}/385 冠状面</p>
             </div>
         </div>
 
         
-        <div class="row flex1">
-            <div class="col-12">
-                <p>通气检查示例：</p>
-            </div>
-        </div>
-        <div class="row flex2">
-            <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_v_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
-                <p style="text-align: right">{idx_arr[0] + 1}/385 冠状面</p>
-            </div>
-            <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_v_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
-                <p style="text-align: right">{idx_arr[1] + 1}/385 冠状面</p>
-            </div>
-        </div>
 
     </div>
 </body>
