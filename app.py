@@ -276,7 +276,7 @@ def image_process(json_data, task_id):
         pixel_sum += info["white_pixel_count"]
 
     mysql_tool.update(
-        "update study set pixel_p_sum = %s, ventilation_perfusion_ratio = %s where id = %s",
+        "update `study` set pixel_p_sum = %s, ventilation_perfusion_ratio = %s where id = %s",
         (pixel_sum, round(float(ventilation_perfusion_ratio), 2), study_id)
     )
 
