@@ -554,7 +554,7 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, ventilati
         <hr>
         <div class="row flex1">
             <div class="col-12">
-                <p>血灌注检查示例：</p>
+                <p>检查示例：</p>
             </div>
         </div>
         <div class="row flex2">
