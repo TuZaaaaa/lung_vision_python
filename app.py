@@ -617,7 +617,7 @@ def data_clear():
     mongo_tool.delete_many({"study_id": str(study_id)})
     # 删除 mysql file 记录, 检查记录像素值归零
     mysql_tool.delete("delete from file where study_id = %s", (study_id,))
-    mysql_tool.update("update study set pixel_p_sum = 0, pixel_v_sum = 0, process_status = '未导入', file_num = 0, execute_time = 0 where id = %s", (study_id,))
+    mysql_tool.update("update study set pixel_p_sum = 0, pixel_v_sum = 0, ventilation_perfusion_ratio = 0, process_status = '未导入', file_num = 0, execute_time = 0 where id = %s", (study_id,))
 
     mongo_tool.close_connection()
     mysql_tool.close_connection()
