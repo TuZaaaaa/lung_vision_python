@@ -567,11 +567,11 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, ventilati
                 <p style="text-align: right">{idx_arr[1] + 1}/385 冠状面</p>
             </div>
             <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_r_images['image1']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <img class="study-img" src="data:image/png;base64,{base64_r_images['image3']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
                 <p style="text-align: right">{idx_arr[2] + 1}/385 冠状面</p>
             </div>
             <div class="col-6">
-                <img class="study-img" src="data:image/png;base64,{base64_r_images['image2']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
+                <img class="study-img" src="data:image/png;base64,{base64_r_images['image4']}" style="width: 400px; height: 300px;margin-top:50px;position: relative;left: 15%;">
                 <p style="text-align: right">{idx_arr[3] + 1}/385 冠状面</p>
             </div>
         </div>
