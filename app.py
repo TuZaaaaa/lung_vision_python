@@ -163,13 +163,13 @@ def upload_file():
     return Result.success().to_response()
 
 @app.route('/lvs-py-api/image_process', methods=['POST'])
-def create_task():
+def create_image_process_task():
     task_id = str(len(tasks) + 1)  # 任务 ID
     tasks[task_id] = {"status": "processing", "result": None}
     # 启动后台线程
     thread = threading.Thread(target=image_process, args=(request.get_json(), task_id))
     thread.start()
-    return Result.success_with_data({"task_id": task_id, "status": "processing" ,"message": "处理中"}).to_response()
+    return Result.success_with_data({"task_id": task_id, "task_name": "image_process", "status": "processing" ,"message": "处理中"}).to_response()
 @app.route('/lvs-py-api/task_status/<task_id>', methods=['GET'])
 def get_task_status(task_id):
     task = tasks[task_id]
@@ -606,9 +606,20 @@ def generate_report(patient_name, age, gender, exam_date, exam_number, ventilati
     return buffer
 
 @app.route('/lvs-py-api/data_clear', methods=['POST'])
-def data_clear():
-    study_id = request.get_json().get('studyId')
+def create_data_clear_task():
+    task_id = str(len(tasks) + 1)  # 任务 ID
+    tasks[task_id] = {"status": "processing", "result": None}
+    # 启动后台线程
+    thread = threading.Thread(target=data_clear, args=(request.get_json(), task_id))
+    thread.start()
+    return Result.success_with_data({"task_id": task_id, "task_name": "data_clear", "status": "processing" ,"message": "处理中"}).to_response()
+
+def data_clear(json_data, task_id):
+    start_time = time.time()
+    print('data clear 开始')
+    study_id = json_data.get('studyId')
     if not study_id:
+        tasks[task_id] = {"status": "error", "msg": "检查id 不存在"}
         return Result.error('检查id 不存在').to_response()
 
     # 数据库初始化
@@ -622,7 +633,10 @@ def data_clear():
     mongo_tool.close_connection()
     mysql_tool.close_connection()
 
-    return Result.success().to_response()
+    end_time = time.time()  # 记录结束时间
+    print('data clear 结束' + str(round(end_time - start_time, 2)) + 's')
+    tasks[task_id] = {"status": "finished", "msg": "处理完成"}
+    return
 
 if __name__ == '__main__':
     app.run()
