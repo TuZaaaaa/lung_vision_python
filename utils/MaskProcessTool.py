@@ -7,7 +7,7 @@ from typing import Dict
 from PIL import Image
 
 
-def process_ct_images(ct_images: Dict[str, bytes], mask_images: Dict[str, bytes]) -> Dict[str, bytes]:
+def process_ct_images(ct_images: Dict[str, bytes], mask_images: Dict[str, bytes], flag: str) -> Dict[str, bytes]:
     """
     处理CT和掩膜图像的流式处理函数
     输入:
@@ -25,7 +25,7 @@ def process_ct_images(ct_images: Dict[str, bytes], mask_images: Dict[str, bytes]
     # 处理每对图像
     for ct_filename, ct_data in ct_images.items():
         # 找到对应的mask（假设文件名有某种关联性，这里简单匹配）
-        mask_filename = next((k for k in mask_images.keys() if ct_filename.split('_')[-1] in k.split("_")[-1]), None)
+        mask_filename = next((k for k in mask_images.keys() if str(ct_filename).split('_')[-1] in k.split("_")[-1]), None)
         print(mask_filename)
         print(ct_filename)
         if not mask_filename:
@@ -45,11 +45,17 @@ def process_ct_images(ct_images: Dict[str, bytes], mask_images: Dict[str, bytes]
 
             # 预处理
             # original_ct_rgb = cv2.cvtColor(original_ct, cv2.COLOR_BGR2RGB)
-            cropped_img = original_ct[477:950, 145:620]
-            resize_img = cv2.resize(cropped_img, (512, 512), interpolation=cv2.INTER_NEAREST)
+            if flag == 'c':
+                cropped_img = original_ct[477:950, 145:620]
+                resize_img = cv2.resize(cropped_img, (512, 512), interpolation=cv2.INTER_NEAREST)
+            # cropped_img = original_ct[0:447, 0:788]
+            else:
+                resize_img = original_ct
+
 
             cv2.imwrite('ct_crop.png', resize_img)
             cv2.imwrite('ct_seg.png', segmented_lungs)
+            # test
             # segmented_lungs = cv2.resize(segmented_lungs, (original_ct.shape[1], original_ct.shape[0]))
 
             # 应用默认变换（简化示例，可根据需要添加特征匹配）

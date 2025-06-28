@@ -7,7 +7,7 @@ from unet.net import UNet
 from unet.data import transform
 from unet.utils import keep_image_size_open_rgb  # assuming this is defined in utils
 
-def process_stream(input_files: dict) -> dict:
+def process_stream(input_files: dict, flag: str) -> dict:
     """
     Processes a set of input images (provided as a dict with filenames as keys and file bytes as values)
     using the UNet model and returns a dict of processed output images (encoded as PNG bytes),
@@ -16,7 +16,14 @@ def process_stream(input_files: dict) -> dict:
     # Initialize network model and load weights from 'params/save_pth_770/unet.pth'
     net = UNet(2).cuda()
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    weights = os.path.join(current_dir, 'params', 'unet.pth')
+    if flag == 'c':
+        weights = os.path.join(current_dir, 'params', 'unet1.pth')
+    elif flag == 's':
+        weights = os.path.join(current_dir, 'params', 'unet2.pth')
+    elif flag == 'a':
+        weights = os.path.join(current_dir, 'params', 'unet3.pth')
+    else:
+        print("error")
     if os.path.exists(weights):
         net.load_state_dict(torch.load(weights))
         print('successfully loaded weights')
@@ -27,6 +34,7 @@ def process_stream(input_files: dict) -> dict:
     output_files = {}
 
     for filename, file_bytes in input_files.items():
+        filename = str(filename)
         # Write the file bytes to a temporary file so we can use keep_image_size_open_rgb
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
             tmp.write(file_bytes)
@@ -88,6 +96,7 @@ if __name__ == '__main__':
                     input_files[filename] = f.read()
 
         # Process the images in streaming mode
+
         result = process_stream(input_files)
 
         # Save each processed image to the output folder

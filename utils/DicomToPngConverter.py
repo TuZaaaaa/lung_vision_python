@@ -19,7 +19,7 @@ class DicomToPngConverter:
         将 DICOM 文件转换为 PNG，并返回字节数据。
 
         :param dicom_files: 包含 DICOM 文件数据的字典，键为文件名，值为文件的字节数据。
-        :return: 一个字典，键为转换后的 PNG 文件名，值为 PNG 文件的字节数据。
+        :return: 一个字典，键为转换后的 PNG 文件名，值为PNG 文件的字节数据。
         """
         converted_images = {}
 
