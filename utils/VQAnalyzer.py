@@ -3,9 +3,9 @@ import numpy as np
 from skimage import exposure
 from skimage.registration import phase_cross_correlation
 from skimage.metrics import structural_similarity as ssim
-# import matplotlib.pyplot as plt
-# from matplotlib.colors import Normalize
-# from matplotlib.cm import ScalarMappable
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
 
 
 class VQAnalyzer:
@@ -219,38 +219,8 @@ class VQAnalyzer:
         if not all_ratios:
             return vis_img
 
-        # norm = Normalize(vmin=min(all_ratios), vmax=max(all_ratios))
-
-        # 先把列表变成 ndarray，并显式转成 float（或你需要的其他类型）
-        ratios_arr = np.asarray(all_ratios, dtype=float)
-
-        # 再做归一化
-        if ratios_arr.size == 0:
-            raise ValueError("all_ratios 为空，无法归一化")
-
-        vmin, vmax = ratios_arr.min(), ratios_arr.max()
-        if vmin == vmax:                      # 防止除以 0
-            norm = np.zeros_like(ratios_arr, dtype=float)
-        else:
-            norm = exposure.rescale_intensity(
-                ratios_arr,
-                in_range=(vmin, vmax),
-                out_range=(0, 1)
-            )
-        # cmap = plt.get_cmap('jet')
-
-        def build_jet_lut(n=256):
-            """
-            纯 NumPy 实现的经典 Jet colormap。
-            返回形状 (n, 3) 的浮点 RGB 数组，数值范围 0-1。
-            """
-            x = np.linspace(0, 1, n)
-            r = np.clip(1.5 - np.abs(4 * x - 3), 0, 1)
-            g = np.clip(1.5 - np.abs(4 * x - 2), 0, 1)
-            b = np.clip(1.5 - np.abs(4 * x - 1), 0, 1)
-            return np.stack((r, g, b), axis=1)
-
-        cmap = build_jet_lut()  # (256, 3) array
+        norm = Normalize(vmin=min(all_ratios), vmax=max(all_ratios))
+        cmap = plt.get_cmap('jet')
 
         # 绘制左肺区域
         for region, ratio in zip(left_regions, left_ratios):

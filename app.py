@@ -1,14 +1,21 @@
 import base64
 import io
+import os
 import re
+import sys
 import tempfile
 import threading
 import time
+from io import BytesIO
 from pathlib import Path
+
 import numpy as np
+from PIL import Image
 from bson import ObjectId
 from flask import Flask, request, jsonify
 from loguru import logger
+from playwright.sync_api import sync_playwright
+
 from common.Result import Result
 from unet.unet_process import process_stream
 from utils import MaskProcessTool
@@ -17,16 +24,11 @@ from utils.DicomToPngConverter import DicomToPngConverter
 from utils.MongoDBTool import MongoDBTool
 from utils.MySQLTool import MySQLTool
 from utils.PixelTool import PixelTool
-from playwright.sync_api import sync_playwright
-from io import BytesIO
-from PIL import Image
-import torch
-import torchvision
 from utils.VQAnalyzer import VQAnalyzer
-import sys
-import os
 
 os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
+_array_p_id = []
+_array_v_id = []
 
 if getattr(sys, 'frozen', False):
     # 打包后的临时路径
@@ -1002,6 +1004,79 @@ def data_clear(json_data, task_id):
     tasks[task_id] = {"status": "finished", "msg": "处理完成"}
     return
 
+@app.route('/lvs-py-api/image_preview_count', methods=['POST'])
+def image_preview_count():
+    json = request.get_json()
+    study_id = json.get('studyId')
+    orientation = json.get('orientation')
+    # 数据库初始化
+    mysql_tool = MySQLTool(host="localhost", user="root", password="root", database="db_vision")
+
+    res = mysql_tool.execute_query("SELECT count(*) total FROM file WHERE study_id = %s and orientation=%s;", (study_id, orientation))
+    print(res)
+    total = 0
+    if 'data' in res.keys() and res['data']:
+        for row in res['data']:
+            for record in row:
+                total = record['total']
+
+    return Result.success_with_data({"total": total}).to_response()
+
+@app.route('/lvs-py-api/image_preview', methods=['POST'])
+def image_preview():
+    json = request.get_json()
+    study_id = json.get('studyId')
+    offset = json.get('offset')
+    limit = json.get('limit')
+    orientation = json.get('orientation')
+
+    # 数据库初始化
+    mongo_tool = MongoDBTool(db_name="mongo_vision", collection_name="dicom_images")
+    mysql_tool = MySQLTool(host="localhost", user="root", password="root", database="db_vision")
+
+    global _array_p_id
+    global _array_v_id
+    if len(_array_p_id) == 0 and len(_array_p_id) == 0:
+        # 查询所有切片记录
+        res = mysql_tool.execute_query("SELECT * FROM file WHERE study_id = %s and orientation = %s;", (study_id, orientation))
+        if 'data' in res.keys() and res['data']:
+            for row in res['data']:
+                for record in row:
+                    _array_p_id.append(record['processed_perfusion_id'])
+                    _array_v_id.append(record['processed_ventilation_id'])
+
+
+    slice_p_ids = _array_p_id[offset: offset + limit]
+    slice_v_ids = _array_v_id[offset: offset + limit]
+
+    p_dict = {}
+    v_dict = {}
+    for idx, sid in enumerate(slice_p_ids, start=offset):
+        result_doc = mongo_tool.find_one({"_id": ObjectId(sid)})
+        if result_doc["success"]:
+            p_dict[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+
+    for idx, sid in enumerate(slice_v_ids, start=offset):
+        result_doc = mongo_tool.find_one({"_id": ObjectId(sid)})
+        if result_doc["success"]:
+            v_dict[result_doc["data"]["filename"]] = result_doc["data"]["image_data"]
+
+
+    analyzer = VQAnalyzer()
+    print(slice_v_ids)
+
+    result_files = analyzer.analyze_and_visualize_dicts(v_dict, p_dict)
+
+    images = []
+
+    # 对 result_files.items() 做切片，从 offset 开始，取 limit 个
+    i = offset
+    for idx, (image_name, image_bytes) in enumerate(result_files.items(), 0):
+        b64 = base64.b64encode(image_bytes).decode('utf-8')
+        images.append({"sliceIndex": i, "data": f"data:image/png;base64,{b64}"})
+        i += 1
+
+    return Result.success_with_data({"images": images}).to_response()
 
 if __name__ == '__main__':
     app.run()

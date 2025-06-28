@@ -97,7 +97,7 @@ if __name__ == '__main__':
 
         # Process the images in streaming mode
 
-        result = process_stream(input_files)
+        result = process_stream(input_files, 'a')
 
         # Save each processed image to the output folder
         for out_filename, img_bytes in result.items():
