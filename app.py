@@ -29,6 +29,7 @@ from utils.VQAnalyzer import VQAnalyzer
 os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
 _array_p_id = []
 _array_v_id = []
+_current_orientation = ''
 
 if getattr(sys, 'frozen', False):
     # 打包后的临时路径
@@ -1036,7 +1037,8 @@ def image_preview():
 
     global _array_p_id
     global _array_v_id
-    if len(_array_p_id) == 0 and len(_array_p_id) == 0:
+    global _current_orientation
+    if len(_array_p_id) == 0 and len(_array_p_id) == 0 and _current_orientation != orientation:
         # 查询所有切片记录
         res = mysql_tool.execute_query("SELECT * FROM file WHERE study_id = %s and orientation = %s;", (study_id, orientation))
         if 'data' in res.keys() and res['data']:
@@ -1044,10 +1046,12 @@ def image_preview():
                 for record in row:
                     _array_p_id.append(record['processed_perfusion_id'])
                     _array_v_id.append(record['processed_ventilation_id'])
+        _current_orientation = orientation
 
 
     slice_p_ids = _array_p_id[offset: offset + limit]
     slice_v_ids = _array_v_id[offset: offset + limit]
+
 
     p_dict = {}
     v_dict = {}
