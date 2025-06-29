@@ -1038,7 +1038,10 @@ def image_preview():
     global _array_p_id
     global _array_v_id
     global _current_orientation
-    if len(_array_p_id) == 0 and len(_array_p_id) == 0 and _current_orientation != orientation:
+    if (len(_array_p_id) == 0 and len(_array_p_id) == 0) or _current_orientation != orientation:
+        print(_current_orientation)
+        _array_p_id = []
+        _array_v_id = []
         # 查询所有切片记录
         res = mysql_tool.execute_query("SELECT * FROM file WHERE study_id = %s and orientation = %s;", (study_id, orientation))
         if 'data' in res.keys() and res['data']:
