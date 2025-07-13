@@ -334,10 +334,6 @@ def image_process(json_data, task_id):
                 # else:
                 cropped_img = original_ct[477:950, 145:620]
                 resize_img = cv2.resize(cropped_img, (512, 512), interpolation=cv2.INTER_NEAREST)
-                # 测试 ct 和 p/v 裁切
-                if ct_filename == 'IMG-094221-0269_269.png':
-                    pass
-                cv2.imwrite('ct_preprocess.png', resize_img)
                 success, encoded_img = cv2.imencode('.png', resize_img.copy())
                 if not success:
                     raise ValueError(f"图像编码失败: {ct_filename}")
